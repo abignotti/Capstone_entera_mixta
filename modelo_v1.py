@@ -13,7 +13,7 @@ df_motor_info = pd.read_csv('Datos/Motor_info.csv')
 # 2. Conjuntos
 P_WB = df_status_wb['matricula'].tolist()
 I_WB = P_WB.copy()
-T = list(range(1, 101))   # semanas 1…50
+T = list(range(1, 101))   # semanas 1…100
 
 # 3. Ciclos por semana (normalización + prefijo)
 
@@ -231,6 +231,15 @@ for t in T[1:]:
         name=f"stock_flow_{t}"
     )
 
+# Restricción de continuidad (que no puedan haber swaps)
+for i in I_WB:
+    for p in P_WB:
+        for t in T[1:]:  # desde semana 2 en adelante
+            model.addConstr(
+                a[i, p, t] >= a[i, p, t-1] - m[i, t],
+                name=f"continuity_{i}_{p}_{t}"
+            )
+                   
 """
 # 4.8 Definición de swap: z[i,t] ≥ |a[i,·,t]–a[i,·,t–1]|
 for i in I_WB:
