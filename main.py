@@ -291,12 +291,19 @@ import pandas as pd
 records_plane = []
 prev_assignment = {p: None for p in P_WB}
 lease_count    = {p: 0    for p in P_WB}   # contador de arrendos por avión
-
+new_motor_id = max(I_WB) + 1
 for t in T:
     for p in P_WB:
         motor  = next((i for i in I_WB if a[i, p, t].Xn > 0.5), None)
         cycles = y[motor, t].Xn if motor is not None else 0
         threshold = C[p]
+        if b[p, t].Xn > 0.5:  # Si se compra un motor para el avión p en la semana t
+            # Asignar un nuevo ID único para el motor comprado
+            motor_id = new_motor_id
+            new_motor_id += 1  # Incrementar el contador para el próximo motor
+
+            # Actualizar el conjunto de motores I_WB con el nuevo motor
+            I_WB.append(motor_id)  # Añadir el nuevo motor al conjunto de motores
 
         # Leased: lease_{n} si ℓ[p,t]=1, nada si es propio o comprado
         if ell[p, t].Xn > 0.5:
@@ -307,6 +314,12 @@ for t in T:
 
         # Bought flag
         bought = "buy" if b[p, t].Xn > 0.5 else ""
+        if bought == "buy":
+            motor_assigned = f"New_Motor_{new_motor_id}"  # Asignar el ID único del motor comprado
+            # Incrementamos el ID para el siguiente motor comprado
+            new_motor_id += 1
+        else:
+            motor_assigned = id2mat[motor] if motor else None  # Si no fue comprado, mostramos el motor original asignado
 
         # Swap
         prev = prev_assignment[p]
@@ -316,7 +329,7 @@ for t in T:
         records_plane.append({
             'Semana':            t,
             'Avion_ID':          p,
-            'Motor_asignado':    id2mat[motor] if motor else None,
+            'Motor_asignado':    motor_assigned,
             'Ciclos_acumulados': cycles,
             'Umbral_maximo':     threshold,
             'Leased':            lease_tag,
