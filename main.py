@@ -2,6 +2,8 @@ import pandas as pd
 from gurobipy import Model, GRB, quicksum
 
 
+####################### CARGA DE DATOS ####################################
+
 # --- Paso 2 (con IDs numéricos): Leer datos y derivar C[id] ---
 
 # 1. Cargar CSV de flota wide‐body
@@ -75,7 +77,7 @@ M         = max(C.values())
 
 print("✅ Datos cargados.")
 
-
+######################## MODELO DE OPTIMIZACION ########################################3
 
 # --- Paso 3: Definir el modelo y las variables de decisión ---
 
@@ -169,6 +171,19 @@ for i in I_WB:
                       + quicksum(c[p] * a[i, p, t] for p in P_WB),
             name=f"cycles_dyn_{i}_{t}"
         )
+        
+# 4.4b Reset de ciclos a cero al volver de mantención  (Comprobar su funcionamiento)
+for i in I_WB:
+    for t in T[1:]:
+        if t - d >= 1:
+            model.addConstr(
+                y[i, t] <= M * (1 - m[i, t - d]),
+                name=f"reset_ciclos_superior_{i}_{t}"
+            )
+            model.addConstr(
+                y[i, t] >= -M * (1 - m[i, t - d]),
+                name=f"reset_ciclos_inferior_{i}_{t}"
+            )
 
 # 4.5 Límite dinámico de ciclos con big-M (corregido)
 
@@ -283,6 +298,8 @@ if model.status == GRB.OPTIMAL:
 else:
     print("No se encontró solución óptima. Estado:", model.status)
 
+
+############### ARCHIVOS PARA MOSTRAR RESULTADOS #######################
 
 
 import pandas as pd
