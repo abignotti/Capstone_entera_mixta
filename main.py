@@ -109,6 +109,7 @@ b   = model.addVars(P_WB, T, vtype=GRB.BINARY, name="b")
 
 # 3.6. NUEVA variable de swap: cambia de avión entre t-1 y t
 # z = model.addVars(I_WB, T, vtype=GRB.BINARY, name="z")
+z = model.addVars(I_WB, T[1:], vtype=GRB.BINARY, name="z")  # z[i,t] = 1 si motor i hace swap libre en t
 
 # --- Paso 3.x: Asignación inicial en t=1 según el mismo id ---
 # (pone cada motor i en el avión p=i durante la semana 1, y ninguno en los demás)
@@ -228,50 +229,31 @@ for t in T[1:]:
     )
 
 
-# 4.8 Motor sigue en el mismo Avión que la semana Anterior
+
+
+# Restricción Swaps Nico
 for i in I_WB:
     for p in P_WB:
-        for t in T[1:]:  # desde semana 2 en adelante
+        for t in T[1:]:
             model.addConstr(
-                a[i, p, t] >= a[i, p, t-1] - m[i, t],
-                name=f"continuity{i}{p}{t}"
+                a[i, p, t] >= a[i, p, t-1] - m[i, t] - z[i, t],
+                name=f"swap_controllable_{i}_{p}_{t}"
             )
 
-"""
-# 4.8 Definición de swap: z[i,t] ≥ |a[i,·,t]–a[i,·,t–1]|
-for i in I_WB:
-    for t in T[1:]:
-        # cambio positivo
-        model.addConstr(
-            z[i, t] >= quicksum(a[i, p, t] - a[i, p, t-1] for p in P_WB),
-            name=f"swap_pos_{i}_{t}"
-        )
-        # cambio negativo
-        model.addConstr(
-            z[i, t] >= quicksum(a[i, p, t-1] - a[i, p, t] for p in P_WB),
-            name=f"swap_neg_{i}_{t}"
-        )
-
-# 4.9 Límite de 1 swap cada 2 semanas (ventana deslizante)
 for t in T[1:]:
-    model.addConstr(
-        quicksum(z[i, tau] for i in I_WB for tau in [t-1, t]) <= 1,
-        name=f"swap_limit_{t}"
-    )
-"""
-
-"""
-# 4.10 Prohibir compras al final si arrendar es más barato
-H = max(T)
-W_buy = (BuyCost // LeaseCost) + 1
-for p in P_WB:
-    for t in T:
-        if t > H - W_buy:
+    if t % 2 == 0:  # semanas pares
+        model.addConstr(
+            quicksum(z[i, t] for i in I_WB) <= 1,
+            name=f"one_free_swap_week_{t}"
+        )
+    else:
+        for i in I_WB:
             model.addConstr(
-                b[p, t] == 0,
-                name=f"no_buy_end_{p}_{t}"
+                z[i, t] == 0,
+                name=f"no_free_swap_odd_{i}_{t}"
             )
-"""
+
+
 
 
 # --- Paso 5: Definir la función objetivo y optimizar ---
