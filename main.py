@@ -213,8 +213,8 @@ for t in T:
 #   - Semana 1: stock inicial + compras - arrendos
 model.addConstr(
     S[1] == S0
-           + quicksum(b[p, 1] for p in P_WB)
-           - quicksum(ell[p, 1] for p in P_WB),
+           + quicksum(b[p, 1] for p in P_WB),
+           #- quicksum(ell[p, 1] for p in P_WB),
     name="stock_init"
 )
 #   - Semanas 2…260: stock anterior + compras + retornos de mantención - arrendos
@@ -222,11 +222,13 @@ for t in T[1:]:
     model.addConstr(
         S[t] == S[t-1]
                + quicksum(b[p, t] for p in P_WB)
-               + quicksum(m[i, t-d] for i in I_WB if t-d > 0)
-               - quicksum(ell[p, t] for p in P_WB),
+               + quicksum(m[i, t-d] for i in I_WB if t-d > 0),
+               #- quicksum(ell[p, t] for p in P_WB),
         name=f"stock_flow_{t}"
     )
 
+
+# Motor sigue en el mismo Avión que la semana Anterior
 for i in I_WB:
     for p in P_WB:
         for t in T[1:]:  # desde semana 2 en adelante
@@ -304,19 +306,19 @@ lease_count    = {p: 0    for p in P_WB}   # contador de arrendos por avión
 
 for t in T:
     for p in P_WB:
-        motor  = next((i for i in I_WB if a[i, p, t].Xn > 0.5), None)
+        motor  = next((i for i in I_WB if a[i, p, t].X > 0.5), None)
         cycles = y[motor, t].Xn if motor is not None else 0
         threshold = C[p]
 
         # Leased: lease_{n} si ℓ[p,t]=1, nada si es propio o comprado
-        if ell[p, t].Xn > 0.5:
+        if ell[p, t].X > 0.5:
             lease_count[p] += 1
             lease_tag = f"lease_{lease_count[p]}"
         else:
             lease_tag = ""
 
         # Bought flag
-        bought = "buy" if b[p, t].Xn > 0.5 else ""
+        bought = "buy" if b[p, t].X > 0.5 else ""
 
         # Swap
         prev = prev_assignment[p]
@@ -345,19 +347,30 @@ cum_cost = 0.0
 for t in T:
     # costo acumulado
     cum_cost += sum(
-        LeaseCost*ell[p, t].Xn + BuyCost*b[p, t].Xn
+        LeaseCost * ell[p, t].X + BuyCost * b[p, t].X
         for p in P_WB
     )
+
+    # conteos
+    n_mant = sum(int(r[i, t].X > 0.5) for i in I_WB)
+    n_lease = sum(int(ell[p, t].X > 0.5) for p in P_WB)
+    n_buy   = sum(int(b[p, t].X  > 0.5) for p in P_WB)
+    n_swap  = sum(rec['Swap'] for rec in records_plane if rec['Semana'] == t)
+
+    # nuevo: motores en stock al inicio de la semana t
+    n_stock = sum(int(s[i, t].X > 0.5) for i in I_WB)
+
     records_weekly.append({
-        'Semana':                    t,
-        'Num_Aviones':               len(P_WB),
-        'Motores_en_mantenimiento':  int(sum(r[i, t].Xn > 0.5 for i in I_WB)),
-        'Motores_arrendados':        int(sum(ell[p, t].Xn > 0.5 for p in P_WB)),
-        'Motores_comprados':         int(sum(b[p, t].Xn  > 0.5 for p in P_WB)),
-        'Swaps_realizados':          int(sum(rec['Swap'] for rec in records_plane if rec['Semana']==t)),
-        'Stock_motores_repuestos':   S[t].Xn,              # <-- nuevo
-        'Costo_acumulado':           cum_cost
+        'Semana':                   t,
+        'Num_Aviones':              len(P_WB),
+        'Motores_en_mantenimiento': n_mant,
+        'Motores_arrendados':       n_lease,
+        'Motores_comprados':        n_buy,
+        'Swaps_realizados':         n_swap,
+        'Motores_en_stock':         n_stock,        # <-- nueva columna
+        'Costo_acumulado':          cum_cost
     })
 
 df_weekly_report = pd.DataFrame(records_weekly)
 df_weekly_report.to_csv('processed_data/weekly_report.csv', index=False)
+print(f"-> processed_data/weekly_report.csv ({len(df_weekly_report)} filas)")
