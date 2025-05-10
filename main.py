@@ -154,24 +154,36 @@ for i in I_WB:
             name=f"maint_duration_{i}_{t}"
         )
 
-# 4.4 Acumulación de ciclos: y[i,1] parte de y0, luego crece solo si a[i,p,t]=1
+# 4.4 Acumulación de ciclos considerando reinicio tras mantención
 for i in I_WB:
-    # semana 1
+    # Semana 1: inicialización con y0
     model.addConstr(
-        y[i, 1] == y0[i]
-                  + quicksum(c[p] * a[i, p, 1] for p in P_WB),
+        y[i, 1] == y0[i] + quicksum(c[p] * a[i, p, 1] for p in P_WB),
         name=f"init_cycles_{i}"
     )
-    # semanas 2…260
+    
+    # Semanas 2 en adelante
     for t in T[1:]:
-        model.addConstr(
-            y[i, t] == y[i, t-1]
-                      + quicksum(c[p] * a[i, p, t] for p in P_WB),
-            name=f"cycles_dyn_{i}_{t}"
-        )
+        if t - d >= 1:
+            # Caso donde el motor podría volver del mantenimiento esta semana
+            model.addConstr(
+                y[i, t] <= (1 - m[i, t - d]) * (y[i, t-1] + quicksum(c[p] * a[i, p, t] for p in P_WB)) + M * m[i, t - d],
+                name=f"y_upper_reset_{i}_{t}"
+            )
+            model.addConstr(
+                y[i, t] >= (1 - m[i, t - d]) * (y[i, t-1] + quicksum(c[p] * a[i, p, t] for p in P_WB)) - M * m[i, t - d],
+                name=f"y_lower_reset_{i}_{t}"
+            )
+        else:
+            # No puede haber retorno aún, ciclo se acumula normalmente
+            model.addConstr(
+                y[i, t] == y[i, t-1] + quicksum(c[p] * a[i, p, t] for p in P_WB),
+                name=f"y_no_reset_{i}_{t}"
+            )
+
+
 
 # 4.5 Límite dinámico de ciclos con big-M (corregido)
-
 for i in I_WB:
     # Semana 1: usamos y0[i] en lugar de y[i,0]
     model.addConstr(
@@ -284,8 +296,6 @@ else:
     print("No se encontró solución óptima. Estado:", model.status)
 
 
-
-import pandas as pd
 
 # --- 1) CSV agrupado por avión ---
 records_plane = []
