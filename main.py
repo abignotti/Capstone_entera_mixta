@@ -228,7 +228,7 @@ for t in T[1:]:
     )
 
 
-# Motor sigue en el mismo Avión que la semana Anterior
+# 4.8 Motor sigue en el mismo Avión que la semana Anterior
 for i in I_WB:
     for p in P_WB:
         for t in T[1:]:  # desde semana 2 en adelante
