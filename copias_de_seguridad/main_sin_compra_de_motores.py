@@ -12,38 +12,14 @@ df_status_wb = pd.read_csv('Datos/Fleet_status_WB.csv')
 # 2. Asignar IDs secuenciales según línea de archivo (1…n)
 df_status_wb.insert(0, 'id', range(1, len(df_status_wb) + 1))
 
-######################################################################################################################################################
-# Motores para Comprar
-######################################################################################################################################################
-
-# Número de motores de repuesto que queremos comprar
-n_extra = 3  
-
-# ID de aviones (igual que antes)
-n_aviones = len(df_status_wb)
-P_WB     = list(range(1, n_aviones + 1))
-
-
-######################################################################################################################################################
-
-######################################################################################################################################################
-
-
-# 3. Definir conjuntos de IDs
-
-# IDs de motores extra: justo después de los aviones
-I_extra = list(range(n_aviones + 1, n_aviones + n_extra + 1))
-# IDs de motores totales: los propios (1…n_aviones) más los extra
-I_WB = list(range(1, n_aviones + 1)) + I_extra
-# Horizonte de Prueba
-T    = list(range(1, 30))
-
-
-# 4. Mapeos matricula ↔ id
+# 3. Mapeos matricula ↔ id
 mat2id = dict(zip(df_status_wb['matricula'], df_status_wb['id']))
 id2mat = {i: m for m, i in mat2id.items()}
-for i in I_extra:
-    id2mat[i] = f"EXTRA_{i}"  
+
+# 4. Definir conjuntos de IDs
+P_WB = df_status_wb['id'].tolist()   # IDs de aviones
+I_WB = P_WB.copy()                   # IDs de motores (uno por avión)
+T    = list(range(1, 30))            # horizonte de prueba: semanas 1…24
 
 # 5. Leer ciclos diarios y convertir a semanales
 df_cycles_wb = pd.read_csv('Datos/Operations_cycles_WB.csv')
@@ -90,7 +66,6 @@ for _, row in df_status_wb.iterrows():
         raise KeyError(f"No umbral para operación '{row['Operation']}'")
     C[row['id']] = C_f[fam]
 
-
 # 9. Parámetros económicos y constantes
 df_motor_info = pd.read_csv('Datos/Motor_info.csv')
 LeaseCost = int(df_motor_info.loc[df_motor_info['Action']=='Lease for week','Price'].iloc[0])
@@ -99,12 +74,6 @@ d         = 18
 S0        = 0
 M_max     = 5
 M         = max(C.values())
-
-
-# 10. Extender parametros para los motores extras
-for i in I_extra:
-    y0[i] = 0       # cero ciclos al inicio
-    # C[i]  = M       # o un valor alto (p. ej. el mismo big-M)
 
 print("✅ Datos cargados.")
 
@@ -136,68 +105,47 @@ S = model.addVars(  T,    vtype=GRB.CONTINUOUS, lb=0, name="S")
 # 3.5. Variables de cobertura con arrendo o compra
 # ell[p,t] = 1 si el avión p opera con motor arrendado en la semana t
 ell = model.addVars(P_WB, T, vtype=GRB.BINARY, name="ell")
+# b[p,t]   = 1 si compramos un motor nuevo para el avión p en la semana t
+b   = model.addVars(P_WB, T, vtype=GRB.BINARY, name="b")
 
-# 3.6. Variable binaria: buy_extra[i,t] = 1 si compramos el motor extra i en la semana t
-buy_extra = model.addVars(I_extra, T, vtype=GRB.BINARY, name="buy_extra")
+# 3.6. NUEVA variable de swap: cambia de avión entre t-1 y t
+# z = model.addVars(I_WB, T, vtype=GRB.BINARY, name="z")
 
 
 
 # ─── (4) RESTRICCIONES ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 
-# 4.0 (nuevo) Asignación inicial en t=1
-for i in I_WB:
-    if i <= n_aviones:
-        # Motor “propio” i va al avión i
-        model.addConstr(a[i, i, 1] == 1,    name=f"init_assign_{i}_{i}")
-        model.addConstr(r[i, 1]   == 0,      name=f"init_no_maint_{i}")
-        model.addConstr(s[i, 1]   == 0,      name=f"init_no_stock_{i}")
-        # Asegurarse de que no esté en otro avión
-        for p in P_WB:
-            if p != i:
-                model.addConstr(a[i, p, 1] == 0, name=f"init_noassign_{i}_{p}")
+# 4.0 (pone cada motor i en el avión p=i durante la semana 1, y ninguno en los demás)
+for p in P_WB:
+    for i in I_WB:
+        if i == p:
+            model.addConstr(a[i, p, 1] == 1, name=f"init_assign_{i}_{p}")
+        else:
+            model.addConstr(a[i, p, 1] == 0, name=f"init_noassign_{i}_{p}")
 
-    else:
-        # Motores extra: no asignados, no en mantención, no en stock al inicio
-        for p in P_WB:
-            model.addConstr(a[i, p, 1] == 0,  name=f"extra_noassign_{i}_{p}")
-        model.addConstr(r[i, 1] == 0,          name=f"extra_no_maint_{i}")
-        model.addConstr(s[i, 1] == 0,          name=f"extra_no_stock_{i}")
 
-# 4.1 Estados de cada motor
-#     Exclusividad de estado si es propio (a + r + s = 1)
-#     Si no se han comprado no pueden pertenecer a ningún estado
+# 4.1 Estado exclusivo de cada motor: instalado (a), en mantenimiento (r) o en stock (s)
 for i in I_WB:
     for t in T:
-        if i in I_extra:
-            # hasta que lo compres suma=0; después suma=1
-            model.addConstr(
-                quicksum(a[i,p,t] for p in P_WB) + r[i,t] + s[i,t]
-                == quicksum(buy_extra[i,τ] for τ in range(1, t+1)),
-                name=f"exclusive_extra_{i}_{t}"
-            )
-        else:
-            # motores propios siempre en un único estado
-            model.addConstr(
-                quicksum(a[i,p,t] for p in P_WB) + r[i,t] + s[i,t]
-                == 1,
-                name=f"exclusive_init_{i}_{t}"
-            )
+        model.addConstr(
+            quicksum(a[i, p, t] for p in P_WB)  # suma de asignaciones
+            + r[i, t]                           # más indicador de manutención
+            + s[i, t]                           # más indicador de stock
+            == 1,
+            name=f"exclusive_{i}_{t}"
+        )
 
-
-
-# 4.2 Cobertura revisada: cada avión p en t
-#    o usa un motor (propio o extra comprado y asignado)
-#    o lo arrenda.
+# 4.2 Cobertura de cada avión: motor propio (a) o arrendado (ell) o comprado (b)
 for p in P_WB:
     for t in T:
         model.addConstr(
-            quicksum(a[i, p, t] for i in I_WB)
-            + ell[p, t]
+            quicksum(a[i, p, t] for i in I_WB)  # si hay un motor i asignado a p
+            + ell[p, t]                         # o lo arrendamos
+            + b[p, t]                           # o compramos uno nuevo
             == 1,
             name=f"coverage_{p}_{t}"
         )
-
 
 # 4.3 Duración del mantenimiento: r[i,t] = 1 exactamente d semanas tras m[i,t']
 for i in I_WB:
@@ -239,17 +187,16 @@ for i in I_WB:
 
 
 
-# 4.5 Límite dinámico de ciclos 
+# 4.5 Límite dinámico de ciclos con big-M (corregido)
 for i in I_WB:
+    # Semana 1: usamos y0[i] en lugar de y[i,0]
     model.addConstr(
-        # ciclos iniciales ≤ umbral de la ruta del avión p
         y0[i]
         <= quicksum(C[p] * a[i, p, 1] for p in P_WB)
-           + M * m[i, 1],
+           + M * quicksum(m[i, tau] for tau in range(1, 2)),  # equivale a M*m[i,1]
         name=f"cycle_limit_{i}_1"
     )
-# Semanas 2…260: ahora sí y[i,t-1] existe
-for i in I_WB:
+    # Semanas 2…260: ahora sí y[i,t-1] existe
     for t in T[1:]:
         model.addConstr(
             y[i, t-1]
@@ -267,21 +214,22 @@ for t in T:
     )
 
 # 4.7 Flujo de inventario de repuestos
-#     — En stock inicial (semana 1) usamos sólo compras de extra
+#   - Semana 1: stock inicial + compras - arrendos
 model.addConstr(
     S[1] == S0
-           + quicksum(buy_extra[i, 1] for i in I_extra),
+           + quicksum(b[p, 1] for p in P_WB),
+           #- quicksum(ell[p, 1] for p in P_WB),
     name="stock_init"
 )
-#     — En flujo semanal (t ≥ 2), agregamos compras de extra y retornos de mant.
+#   - Semanas 2…260: stock anterior + compras + retornos de mantención - arrendos
 for t in T[1:]:
     model.addConstr(
         S[t] == S[t-1]
-               + quicksum(buy_extra[i, t] for i in I_extra)
+               + quicksum(b[p, t] for p in P_WB)
                + quicksum(m[i, t-d] for i in I_WB if t-d > 0),
+               #- quicksum(ell[p, t] for p in P_WB),
         name=f"stock_flow_{t}"
     )
-
 
 
 # 4.8 Motor sigue en el mismo Avión que la semana Anterior
@@ -295,44 +243,6 @@ for i in I_WB:
 
 
 
-# 4.9 Solo stock si lo compré antes de t
-for i in I_extra:
-    for t in T:
-        model.addConstr(
-            s[i, t]
-            <= quicksum(buy_extra[i, τ] for τ in range(1, t+1)),
-            name=f"no_stock_before_buy_{i}_{t}"
-        )
-
-
-# 4.10 Sólo puedes asignar un motor extra si ya lo compraste
-for i in I_extra:
-    for p in P_WB:
-        for t in T:
-            model.addConstr(
-                a[i, p, t]
-                <= quicksum(buy_extra[i, tau] for tau in range(1, t+1)),
-                name=f"assign_only_if_bought_{i}_{p}_{t}"
-            )
-
-
-# 4.11. Si compro el motor extra i en la semana t, tiene que usarse ese mismo t
-for i in I_extra:
-    for t in T:
-        model.addConstr(
-            quicksum(a[i, p, t] for p in P_WB)
-            >= buy_extra[i, t],
-            name=f"use_bought_engine_{i}_{t}"
-        )
-
-
-# 4.12 Cada motor puede comprarse solo una vez
-for i in I_extra:
-    model.addConstr(
-        quicksum(buy_extra[i,t] for t in T) <= 1,
-        name=f"max_one_purchase_extra_{i}"
-    )
-
 
 
 
@@ -340,29 +250,22 @@ for i in I_extra:
 
 # --- Paso 5: Definir la función objetivo y optimizar ---
 
-# 5.1. Función objetivo revisada: minimizar arrendos + compras por motor extra
+# 5.1. Función objetivo: minimizar costo de arrendos y compras
 model.setObjective(
-    # coste de arrendar aviones
-    quicksum(LeaseCost * ell[p, t]
-             for p in P_WB for t in T)
-    +
-    # coste de comprar motores extra
-    quicksum(BuyCost * buy_extra[i, t]
-             for i in I_extra for t in T),
+    quicksum(LeaseCost * ell[p, t] + BuyCost * b[p, t]
+             for p in P_WB for t in T),
     GRB.MINIMIZE
 )
 
-# ─── (6) OPTIMIZACION Y PRINTEAR RESULTADOS ────────────────────────────────────────────────────────────────────────────────────────────────────────────
-
-# 6.1. Ejecutar la optimización
+# 5.2. Ejecutar la optimización
 model.optimize()
 
-# 6.2. Obtener e imprimir resultados básicos
+# 5.3. Obtener e imprimir resultados básicos
 if model.status == GRB.OPTIMAL:
     print(f"Costo óptimo total: {model.objVal}")
     # Ejemplo: número total de motores arrendados y comprados
     total_leases = sum(ell[p, t].x for p in P_WB for t in T)
-    total_buys = sum(buy_extra[i, t].x for i in I_extra for t in T)
+    total_buys   = sum(b[p, t].x   for p in P_WB for t in T)
     print(f"Total arrendos  : {int(total_leases)} semanas-motor")
     print(f"Total compras   : {int(total_buys)} motores comprados")
 else:
@@ -370,42 +273,36 @@ else:
 
 
 
-# ─── (7) REGISTROS EN CSV ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+
+# ─── (6) REGISTROS EN CSV ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 # --- 1) CSV agrupado por avión ---
 records_plane = []
+prev_assignment = {p: None for p in P_WB}
 lease_count    = {p: 0    for p in P_WB}   # contador de arrendos por avión
 
 for t in T:
     for p in P_WB:
-        # —––––– Aquí tienes que poner lo que ya hacías antes —–––––
-        # 1) Extraer el motor asignado:
-        motor = next((i for i in I_WB if a[i, p, t].X > 0.5), None)
-
-        # 2) Ciclos acumulados de ese motor:
+        motor  = next((i for i in I_WB if a[i, p, t].X > 0.5), None)
         cycles = y[motor, t].X if motor is not None else 0
-
-        # 3) Umbral de ciclos según el avión p
         threshold = C[p]
 
-        # 4) Lease tag (igual que antes):
+        # Leased: lease_{n} si ℓ[p,t]=1, nada si es propio o comprado
         if ell[p, t].X > 0.5:
             lease_count[p] += 1
             lease_tag = f"lease_{lease_count[p]}"
         else:
             lease_tag = ""
 
-        # 5) Bought: sólo si compraste ese motor extra en t
-        if motor in I_extra and buy_extra[motor, t].X > 0.5:
-            bought = "buy"
-        else:
-            bought = ""
+        # Bought flag
+        bought = "buy" if b[p, t].X > 0.5 else ""
 
-        # 6) Swap (no lo usas todavía):
-        swap = 0
-
-        # 7) Sobreciclo?
-        over = int(cycles > threshold)
+        # Swap
+        prev = prev_assignment[p]
+        swap = int(prev is not None and motor is not None and motor != prev)
+        prev_assignment[p] = motor
 
         records_plane.append({
             'Semana':            t,
@@ -415,10 +312,8 @@ for t in T:
             'Umbral_maximo':     threshold,
             'Leased':            lease_tag,
             'Bought':            bought,
-            'Swap':              swap,
-            'OverThreshold':     over
+            'Swap':              swap
         })
-
 
 df_plane = pd.DataFrame(records_plane)
 df_plane.to_csv('processed_data/plane_weekly_status.csv', index=False)
@@ -430,17 +325,16 @@ cum_cost = 0.0
 
 for t in T:
     # costo acumulado
-    cum_cost += sum(LeaseCost * ell[p, t].X for p in P_WB) \
-            + sum(BuyCost * buy_extra[i, t].X for i in I_extra)
+    cum_cost += sum(
+        LeaseCost * ell[p, t].X + BuyCost * b[p, t].X
+        for p in P_WB
+    )
 
     # conteos
     n_mant = sum(int(r[i, t].X > 0.5) for i in I_WB)
     n_lease = sum(int(ell[p, t].X > 0.5) for p in P_WB)
-    n_buy = sum(int(buy_extra[i, t].X > 0.5) for i in I_extra)
+    n_buy   = sum(int(b[p, t].X  > 0.5) for p in P_WB)
     n_swap  = sum(rec['Swap'] for rec in records_plane if rec['Semana'] == t)
-    # Contar motores en sobreciclo esta semana
-    n_over = sum(1 for rec in records_plane
-                 if rec['Semana']==t and rec['OverThreshold'])
 
     # nuevo: motores en stock al inicio de la semana t
     n_stock = sum(int(s[i, t].X > 0.5) for i in I_WB)
@@ -452,8 +346,7 @@ for t in T:
         'Motores_arrendados':       n_lease,
         'Motores_comprados':        n_buy,
         'Swaps_realizados':         n_swap,
-        'Motores_en_stock':         n_stock,
-        'Motores_sobreciclo':       n_over,        
+        'Motores_en_stock':         n_stock,        # <-- nueva columna
         'Costo_acumulado':          cum_cost
     })
 
