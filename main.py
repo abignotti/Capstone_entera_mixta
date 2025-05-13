@@ -36,7 +36,7 @@ I_extra = list(range(n_aviones + 1, n_aviones + n_extra + 1))
 # IDs de motores totales: los propios (1…n_aviones) más los extra
 I_WB = list(range(1, n_aviones + 1)) + I_extra
 # Horizonte de Prueba
-T    = list(range(1, 40))
+T    = list(range(1, 50))
 
 
 # 4. Mapeos matricula ↔ id
@@ -326,6 +326,50 @@ for i in I_extra:
     )
 
 
+# ─── (4.13) HEURÍSTICA en semanas pares ───────────────────────────────────────────────
+
+# para t>1 en semanas impares:
+for t in T[1:]:
+    if t % 2 != 0:
+        # 1) No iniciar nueva mantención
+        for i in I_WB:
+            model.addConstr(
+                m[i, t] == 0,
+                name=f"no_maint_odd_{i}_{t}"
+            )
+        # 2) No comprar motores extra
+        for i in I_extra:
+            model.addConstr(
+                buy_extra[i, t] == 0,
+                name=f"no_buy_odd_{i}_{t}"
+            )
+        # 3) No cambiar arrendamiento: lease[p,t] == lease[p,t-1]
+        for p in P_WB:
+            model.addConstr(
+                ell[p, t] == ell[p, t-1],
+                name=f"lease_const_odd_{p}_{t}"
+            )
+        # 4) No re-asignar motores: a[i,p,t] == a[i,p,t-1]
+        for i in I_WB:
+            for p in P_WB:
+                model.addConstr(
+                    a[i, p, t] == a[i, p, t-1],
+                    name=f"assign_const_odd_{i}_{p}_{t}"
+                )
+        # 5) Stock permanece: s[i,t] == s[i,t-1]
+        for i in I_WB:
+            model.addConstr(
+                s[i, t] == s[i, t-1],
+                name=f"stock_const_odd_{i}_{t}"
+            )
+
+# ─── (4.14) Ciclo máximo estricto (HEURISTICA de semanas pares) ────────────────────────────────────────────────────────
+for i in I_WB:
+    for t in T:
+        model.addConstr(
+            y[i, t] <= C[i],
+            name=f"cycle_limit_strict_no_over_{i}_{t}"
+        )
 
 
 # ─── (5) FUNCIÓN OBJETIVO Y OPTIMIZACION ────────────────────────────────────────────────────────────────────────────────────────────────────────────
