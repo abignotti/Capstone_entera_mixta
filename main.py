@@ -36,7 +36,7 @@ I_extra = list(range(n_aviones + 1, n_aviones + n_extra + 1))
 # IDs de motores totales: los propios (1…n_aviones) más los extra
 I_WB = list(range(1, n_aviones + 1)) + I_extra
 # Horizonte de Prueba
-T    = list(range(1, 40))
+T    = list(range(1, 30))
 
 
 # 4. Mapeos matricula ↔ id
@@ -210,32 +210,36 @@ for i in I_WB:
             name=f"maint_duration_{i}_{t}"
         )
 
-# 4.4 Acumulación de ciclos considerando reinicio tras mantención
+# ─── (4.4) Acumulación con reset exacto tras mantención ─────────────────────
 for i in I_WB:
-    # Semana 1: inicialización con y0
+    # Semana 1 ya la tenías bien:
     model.addConstr(
         y[i, 1] == y0[i] + quicksum(c[p] * a[i, p, 1] for p in P_WB),
         name=f"init_cycles_{i}"
     )
     
-    # Semanas 2 en adelante
+    # Semanas 2…T
     for t in T[1:]:
+        # ciclos “esta semana”
+        expr = quicksum(c[p] * a[i, p, t] for p in P_WB)
+        
         if t - d >= 1:
-            # Caso donde el motor podría volver del mantenimiento esta semana
+            # Si la mantención que empezó en t−d acaba justo ahora,
+            # m[i, t−d] = 1 identifica ese caso:
             model.addConstr(
-                y[i, t] <= (1 - m[i, t - d]) * (y[i, t-1] + quicksum(c[p] * a[i, p, t] for p in P_WB)) + M * m[i, t - d],
-                name=f"y_upper_reset_{i}_{t}"
-            )
-            model.addConstr(
-                y[i, t] >= (1 - m[i, t - d]) * (y[i, t-1] + quicksum(c[p] * a[i, p, t] for p in P_WB)) - M * m[i, t - d],
-                name=f"y_lower_reset_{i}_{t}"
+                y[i, t]
+                == (1 - m[i, t - d]) * (y[i, t-1] + expr)
+                 + m[i, t - d] * expr,
+                name=f"cycles_reset_exact_{i}_{t}"
             )
         else:
-            # No puede haber retorno aún, ciclo se acumula normalmente
+            # Aún no hay mantención previa que resetee:
             model.addConstr(
-                y[i, t] == y[i, t-1] + quicksum(c[p] * a[i, p, t] for p in P_WB),
-                name=f"y_no_reset_{i}_{t}"
+                y[i, t]
+                == y[i, t-1] + expr,
+                name=f"cycles_accum_{i}_{t}"
             )
+
 
 
 
@@ -343,6 +347,9 @@ model.setObjective(
              for i in I_extra for t in T),
     GRB.MINIMIZE
 )
+
+
+# 
 
 # ─── (6) OPTIMIZACION Y PRINTEAR RESULTADOS ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
