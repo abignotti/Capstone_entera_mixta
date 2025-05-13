@@ -36,7 +36,7 @@ I_extra = list(range(n_aviones + 1, n_aviones + n_extra + 1))
 # IDs de motores totales: los propios (1…n_aviones) más los extra
 I_WB = list(range(1, n_aviones + 1)) + I_extra
 # Horizonte de Prueba
-T    = list(range(1, 30))
+T    = list(range(1, 40))
 
 
 # 4. Mapeos matricula ↔ id
@@ -104,7 +104,7 @@ M         = max(C.values())
 # 10. Extender parametros para los motores extras
 for i in I_extra:
     y0[i] = 0       # cero ciclos al inicio
-    # C[i]  = M       # o un valor alto (p. ej. el mismo big-M)
+    C[i] = M   # o algún valor suficientemente alto
 
 print("✅ Datos cargados.")
 
@@ -239,23 +239,15 @@ for i in I_WB:
 
 
 
-# 4.5 Límite dinámico de ciclos 
+# ─── (4.5) Límite estricto de ciclos tras mantenimiento ─────────────────
 for i in I_WB:
-    model.addConstr(
-        # ciclos iniciales ≤ umbral de la ruta del avión p
-        y0[i]
-        <= quicksum(C[p] * a[i, p, 1] for p in P_WB)
-           + M * m[i, 1],
-        name=f"cycle_limit_{i}_1"
-    )
-# Semanas 2…260: ahora sí y[i,t-1] existe
-for i in I_WB:
-    for t in T[1:]:
+    for t in T:
         model.addConstr(
-            y[i, t-1]
-            <= quicksum(C[p] * a[i, p, t] for p in P_WB)
-               + M * quicksum(m[i, tau] for tau in range(1, t+1)),
-            name=f"cycle_limit_{i}_{t}"
+            y[i, t]
+            <= C[i]       # umbral del motor i
+               + M * r[i, t]   # si está en mantención, permitimos hasta M ciclos
+            ,
+            name=f"cycle_limit_strict_{i}_{t}"
         )
 
 
